@@ -15,10 +15,11 @@ function zellText(td) {
   return c.textContent.replace(/\s+/g, ' ').replace(/ ?\u0001 ?/g, '\n').replace(/\n+$/, '').trim();
 }
 
-function ausHtml(html) {
-  if (!/<table/i.test(html)) return null;
-  const doc = new DOMParser().parseFromString(html, 'text/html');
-  const tab = doc.querySelector('table');
+function ausHtml(html, tab) {
+  if (!tab) {
+    if (!/<table/i.test(html)) return null;
+    tab = new DOMParser().parseFromString(html, 'text/html').querySelector('table');
+  }
   if (!tab) return null;
   const zellen = [], belegt = []; // belegt: Zellen, die ein rowspan von oben füllt
   [...tab.rows].forEach((tr, i) => {
@@ -56,7 +57,10 @@ function ausText(text) {
 // Liefert { zellen, kopf } oder null, wenn in der Zwischenablage keine Tabelle steckt
 export function tabelleAusDaten(daten) {
   if (!daten) return null;
-  const roh = ausHtml(daten.getData('text/html') || '') || ausText(daten.getData('text/plain') || '');
+  return aufraeumen(ausHtml(daten.getData('text/html') || '') || ausText(daten.getData('text/plain') || ''));
+}
+
+function aufraeumen(roh) {
   if (!roh) return null;
   let { zellen } = roh;
   const n = Math.max(...zellen.map((r) => r.length));
@@ -66,6 +70,80 @@ export function tabelleAusDaten(daten) {
   while (zellen[0]?.length && zellen.every((r) => !r[r.length - 1])) zellen.forEach((r) => r.pop());
   if (!zellen.length || !zellen[0].length || (zellen.length < 2 && zellen[0].length < 2)) return null;
   return { zellen, kopf: roh.kopf };
+}
+
+/* ================= Gemischter Inhalt: Text und Tabellen ================= */
+
+const MARKE = '@@TABELLE@@';
+
+// HTML in Text mit Zeilenumbrüchen verwandeln (Absätze, Überschriften, Listenpunkte)
+function htmlText(knoten) {
+  let aus = '';
+  const block = /^(P|DIV|H[1-6]|LI|TR|UL|OL|BLOCKQUOTE|PRE|SECTION|ARTICLE)$/;
+  const lauf = (n) => {
+    if (n.nodeType === 3) { aus += n.textContent.replace(/\s+/g, ' '); return; }
+    if (n.nodeType !== 1 || /^(STYLE|SCRIPT|META|HEAD)$/.test(n.tagName)) return;
+    if (n.tagName === 'BR') { aus += '\n'; return; }
+    const istBlock = block.test(n.tagName);
+    if (istBlock) aus += '\n';
+    if (n.tagName === 'LI') aus += '• ';
+    const fett = /^(B|STRONG|H[1-6])$/.test(n.tagName) || /font-weight:\s*(bold|[6-9]00)/.test(n.getAttribute('style') || '');
+    if (fett) aus += '**';
+    for (const k of n.childNodes) lauf(k);
+    if (fett) aus += '**';
+    if (istBlock) aus += '\n';
+  };
+  lauf(knoten);
+  return aus.split('\n').map((l) => l.trim().replace(/\*\*\s*\*\*/g, '')).join('\n').replace(/\n{2,}/g, '\n').trim();
+}
+
+function textBlock(text) {
+  const t = text.replace(/^\n+|\n+$/g, '');
+  return t.trim() ? [{ art: 'text', text: t }] : [];
+}
+
+// Reiner Text (Markdown von Claude/ChatGPT, Tabulator-Tabellen) in Blöcke teilen
+function bloeckeAusText(text) {
+  const zeilen = text.replace(/\r/g, '').split('\n'), aus = [];
+  let puffer = [];
+  const textRaus = () => { aus.push(...textBlock(puffer.join('\n'))); puffer = []; };
+  for (let i = 0; i < zeilen.length;) {
+    const l = zeilen[i];
+    if (l.trim().startsWith('|') && /^\s*\|?\s*:?-{2,}/.test(zeilen[i + 1] || '')) {
+      let k = i;
+      while (k < zeilen.length && zeilen[k].trim().startsWith('|')) k++;
+      const roh = aufraeumen(ausText(zeilen.slice(i, k).join('\n')));
+      if (roh) { textRaus(); aus.push({ art: 'tabelle', ...roh }); i = k; continue; }
+    }
+    if (l.includes('\t') && (zeilen[i + 1] || '').includes('\t')) {
+      let k = i;
+      while (k < zeilen.length && zeilen[k].includes('\t')) k++;
+      const roh = aufraeumen(ausText(zeilen.slice(i, k).join('\n')));
+      if (roh) { textRaus(); aus.push({ art: 'tabelle', ...roh }); i = k; continue; }
+    }
+    puffer.push(l); i++;
+  }
+  textRaus();
+  return aus;
+}
+
+// Liefert die Blöcke [{art:'text', text} | {art:'tabelle', zellen, kopf}] – oder null, wenn keine Tabelle dabei ist
+export function bloeckeAusDaten(daten) {
+  if (!daten) return null;
+  const html = daten.getData('text/html') || '';
+  let bloecke = [];
+  if (/<table/i.test(html)) {
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const tabellen = [...doc.querySelectorAll('table')].filter((t) => !t.parentElement.closest('table'));
+    const roh = tabellen.map((t) => aufraeumen(ausHtml('', t)));
+    tabellen.forEach((t, i) => t.replaceWith(doc.createTextNode(`\n${MARKE}${i}${MARKE}\n`)));
+    const teile = htmlText(doc.body).split(new RegExp(`${MARKE}(\\d+)${MARKE}`));
+    teile.forEach((t, i) => {
+      if (i % 2 === 0) bloecke.push(...textBlock(t));
+      else if (roh[+t]) bloecke.push({ art: 'tabelle', ...roh[+t] });
+    });
+  } else bloecke = bloeckeAusText(daten.getData('text/plain') || '');
+  return bloecke.some((b) => b.art === 'tabelle') ? bloecke : null;
 }
 
 /* ================= Anlegen ================= */

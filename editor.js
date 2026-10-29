@@ -6,8 +6,8 @@ import {
   verschieben, skalieren, drehen, einfaerben, kopie, bildLaden, bildHolen, formErkennen, formNormalisieren, textNormalisieren, textInhalt,
 } from './zeichnen.js';
 import { werkzeugleisteZeigen, popover, popoverZu, farbwaehler } from './werkzeugleiste.js';
-import { textAnlegen, textFertig, textBearbeitet, textleisteZeigen, textEinstellungen, textNeuPositionieren, textEinsetzen } from './text.js';
-import { tabelleAusDaten, tabelleErstellen, tabelleEinfuegen, tabelleAn, tabelleBearbeiten, tabelleOffen, zelleAn } from './tabelle.js';
+import { textAnlegen, textFertig, textBearbeitet, textleisteZeigen, textEinstellungen, textNeuPositionieren, textEinsetzen, inhaltEinsetzen } from './text.js';
+import { bloeckeAusDaten, tabelleAn, tabelleBearbeiten, tabelleOffen, zelleAn } from './tabelle.js';
 import { zoomfensterUmschalten, zoomfensterOffen, zoomfensterAktualisieren, zoomfensterSeite, zfRendern } from './zoomfenster.js';
 import { elementePopover, alsElementSpeichern } from './elemente.js';
 import { hintergrundEntfernen, stickerEffekt, bildAusDaten } from './bild-werkzeug.js';
@@ -751,9 +751,9 @@ async function ausZwischenablage() {
 document.addEventListener('paste', async (e) => {
   if (!z.heft || $('#editor').hidden || textBearbeitet() || tabelleOffen() || e.target.closest?.('input, textarea')) return;
   // Daten sofort lesen: nach einem await ist die Zwischenablage des Ereignisses leer
-  const roh = tabelleAusDaten(e.clipboardData), text = e.clipboardData?.getData('text/plain') || '';
+  const bloecke = bloeckeAusDaten(e.clipboardData), text = e.clipboardData?.getData('text/plain') || '';
   const s = z.seiten[z.aktuell];
-  if (roh) { e.preventDefault(); const t = await tabelleEinfuegen(s, tabelleErstellen(s, roh)); ws.werkzeug = 'lasso'; merken(); werkzeugleisteZeigen(); auswahlSetzen(t[0][0], [t[0][1]]); return; }
+  if (bloecke) { e.preventDefault(); const neu = await inhaltEinsetzen(s, bloecke); ws.werkzeug = 'lasso'; merken(); werkzeugleisteZeigen(); if (neu.length) auswahlSetzen(s, neu); return; }
   const bild = await bildAusDaten(e.clipboardData);
   if (bild) { e.preventDefault(); bildEinfuegen(bild); }
   else if (z.ablage) einfuegen(z.auswahl ? 14 : 0);

@@ -5,7 +5,7 @@ import { I } from './icons.js';
 import { rahmen, rahmenVergessen, kopie, textNormalisieren, textMasse, messCtx, RASTER, SYSTEM, zeilenhoehe, aufLinieSetzen, textTeilen, textPolster, schriftCss } from './zeichnen.js';
 import { alleSchriften, schriftLaden, vorschauLaden, schriftHinzufuegen } from './schriften.js';
 import { popover, popoverZu, farbwaehler } from './werkzeugleiste.js';
-import { tabelleAusDaten, tabelleErstellen, tabelleEinfuegen, neueTabelle } from './tabelle.js';
+import { bloeckeAusDaten, tabelleErstellen, tabelleEinfuegen, neueTabelle } from './tabelle.js';
 
 let edit = null; // { feld, el, s, vorher, neu, griff }
 
@@ -112,13 +112,12 @@ export function textAnlegen(s, x, y, vorhanden) {
   // Einfügen: Tabellen werden echte Tabellen unter dem Textfeld, alles andere kommt als reiner Text (ohne fremde Formatierung)
   feld.addEventListener('paste', (e) => {
     e.preventDefault(); e.stopPropagation();
-    const roh = tabelleAusDaten(e.clipboardData);
-    if (!roh) return document.execCommand('insertText', false, (e.clipboardData.getData('text/plain') || '').replace(/\r/g, ''));
+    const bloecke = bloeckeAusDaten(e.clipboardData);
+    if (!bloecke) return document.execCommand('insertText', false, (e.clipboardData.getData('text/plain') || '').replace(/\r/g, ''));
     const { el, s: seite } = edit;
     textFertig();
     const leer = !seite.elemente.includes(el);
-    const unten = leer ? el.y : el.y + textMasse(messCtx, el).h + 8;
-    tabelleEinfuegen(seite, tabelleErstellen(seite, roh, el.x, unten));
+    inhaltEinsetzen(seite, bloecke, leer ? el.y : el.y + textMasse(messCtx, el).h + 8);
   });
   feld.addEventListener('blur', () => setTimeout(() => { if (edit?.feld === feld && !document.activeElement?.closest?.('#popover, #werkzeugreihe') && !$('#popover').contains(document.activeElement)) textFertig(); }, 150));
   feld.addEventListener('input', () => {
@@ -206,6 +205,58 @@ async function nachziehen() {
     setTimeout(() => textAnlegen(naechste, fortsetzung.x, fortsetzung.y, fortsetzung), 250);
   } finally { setTimeout(() => (teilen = false), 400); }
 }
+// **fett** und # Überschriften aus Markdown in Läufe übersetzen
+function textZuAbsaetze(text) {
+  return text.replace(/\r/g, '').split('\n').map((zeile) => {
+    let l = zeile, fett = false;
+    const ueber = l.match(/^\s*#{1,6}\s+(.*)$/);
+    if (ueber) { l = ueber[1]; fett = true; }
+    l = l.replace(/^(\s*)[-*]\s+/, '$1• ');
+    const teile = l.split(/\*\*(.+?)\*\*/);
+    const laeufe = teile.map((t, i) => ({ ...standardLauf(), t, b: fett || i % 2 === 1 || ws.text.b })).filter((r, i) => r.t || i === 0);
+    return laeufe.length ? laeufe : [{ ...standardLauf(), t: '' }];
+  });
+}
+
+// Text und Tabellen untereinander auf die Seite setzen; was nicht passt, läuft auf die nächsten Seiten weiter
+export async function inhaltEinsetzen(s, bloecke, yStart) {
+  let seite = s;
+  const links = (sx) => (sx.vorlage === 'liniert' && !sx.hintergrund ? 70 : 40);
+  const raster = (sx) => (!sx.hintergrund && RASTER[sx.vorlage] ? { ...RASTER[sx.vorlage] } : null);
+  let y = yStart ?? (() => {
+    const unten = Math.max(0, ...s.elemente.map((e) => rahmen(e).y2));
+    return unten && unten < s.hoehe - 120 ? unten + 14 : 90;
+  })();
+  const erste = [];
+  for (const b of bloecke) {
+    if (y > seite.hoehe - 60) { seite = await api.naechsteSeite(seite); y = (raster(seite)?.oben ?? 50) - 10; }
+    if (b.art === 'tabelle') {
+      const teile = await tabelleEinfuegen(seite, tabelleErstellen(seite, b, links(seite), y));
+      for (const [sx, t] of teile) if (sx === s) erste.push(t);
+      const [sx, t] = teile[teile.length - 1];
+      seite = sx; y = rahmen(t).y2 + 22;
+      continue;
+    }
+    let el = { typ: 'text', x: links(seite), y, b: seite.breite - links(seite) - RAND, drehung: 0, ausrichtung: 'links', hintergrund: null, raster: raster(seite), absaetze: textZuAbsaetze(b.text) };
+    aufLinieSetzen(el);
+    for (let n = 0; n < 30; n++) {
+      const rest = textTeilen(el, seite.hoehe);
+      seite.elemente.push(el);
+      api.aktion({ typ: 'hinzu', seite, elemente: [el] });
+      api.tinteRendern(seite); api.seiteGeaendert(seite);
+      if (seite === s) erste.push(el);
+      if (!rest) break;
+      seite = await api.naechsteSeite(seite);
+      rest.raster = raster(seite); rest.x = links(seite); rest.b = seite.breite - rest.x - RAND;
+      rest.y = (rest.raster?.oben ?? 50) - 10;
+      aufLinieSetzen(rest);
+      el = rest;
+    }
+    y = el.y + textMasse(messCtx, el).h + 10;
+  }
+  return erste;
+}
+
 // Reinen Text aus der Zwischenablage als neues Textfeld auf die Seite setzen
 export function textEinsetzen(s, text) {
   const x = s.vorlage === 'liniert' && !s.hintergrund ? 70 : 40;
