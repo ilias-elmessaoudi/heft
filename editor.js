@@ -900,6 +900,12 @@ async function seiteHinzu(nach, vorlage, papier) {
   aufbauen();
   requestAnimationFrame(() => zuSeite(nach + 1));
 }
+// Für Text, der unten überläuft: folgende Seite holen oder anlegen
+async function naechsteSeite(s) {
+  const i = z.seiten.indexOf(s);
+  if (!z.seiten[i + 1]) await seiteHinzu(i);
+  return z.seiten[i + 1];
+}
 async function seiteDuplizieren(i) {
   const s = { ...structuredClone(z.seiten[i]), id: id() };
   z.seiten.splice(i + 1, 0, s);
@@ -1123,6 +1129,6 @@ function werkzeugWechsel(neu) {
 Object.assign(api, {
   tinteRendern, seiteGeaendert, aktion, auswahlAufheben, auswahlAendern, auswahlEinfaerben, auswahlFuellen,
   werkzeugleisteZeigen, textleisteZeigen, textEinstellungen, zoomfensterUmschalten, zoomfensterOffen, elementePopover, elementeEinfuegen,
-  setzeNurStift, ausZwischenablage, gesteStarten, gesteBewegen, gesteEnde, gesteAbbrechen, zuSeite, alleTinteRendern, werkzeugWechsel,
+  setzeNurStift, ausZwischenablage, gesteStarten, gesteBewegen, gesteEnde, gesteAbbrechen, zuSeite, naechsteSeite, alleTinteRendern, werkzeugWechsel,
   groessenNeu: () => { if (!z.heft) return; const alt = z.basis; basisBerechnen(); if (Math.abs(alt - z.basis) > .001) groessen(); },
 });

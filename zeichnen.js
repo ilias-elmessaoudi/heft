@@ -17,6 +17,12 @@ export const PAPIER = {
 };
 PAPIER.creme = PAPIER.gelb; // ältere Hefte
 
+// Linienraster der Vorlagen: Abstand und erste Linie (für Text, der auf den Linien sitzt)
+export const RASTER = {
+  liniert: { a: 24, oben: 72 }, eng: { a: 18, oben: 60 }, cornell: { a: 24, oben: 90 }, notizblock: { a: 24, oben: 94 },
+  punkte: { a: 17.5, oben: 17.5 }, gemischt: { a: 24, oben: 60 }, zweispaltig: { a: 24, oben: 72 }, todo: { a: 30, oben: 92 }, kariert: { a: 17.5, oben: 17.5 },
+};
+
 export const VORLAGEN = {
   leer: { name: 'Leer', gruppe: 'Herkömmlich' },
   punkte: { name: 'Gepunktet', gruppe: 'Herkömmlich' },
@@ -292,8 +298,9 @@ export function textLayout(ctx, el) {
   const zeilen = [];
   const breite = Math.max(10, el.b - (el.hintergrund || el.rand ? 16 : 0));
   for (const absatz of el.absaetze) {
-    let zeile = { teile: [], w: 0, g: 0 };
-    const neueZeile = () => { zeilen.push(zeile); zeile = { teile: [], w: 0, g: 0 }; };
+    const ai = el.absaetze.indexOf(absatz);
+    let zeile = { teile: [], w: 0, g: 0, a: ai, n: 0 };
+    const neueZeile = () => { zeilen.push(zeile); zeile = { teile: [], w: 0, g: 0, a: ai, n: 0 }; };
     const leer = !absatz.some((r) => r.t);
     if (leer) { zeile.g = absatz[0]?.g || 16; neueZeile(); continue; }
     for (const r of absatz) {
@@ -302,19 +309,19 @@ export function textLayout(ctx, el) {
         if (!wort) continue;
         let w = ctx.measureText(wort).width;
         if (zeile.w + w > breite && zeile.teile.length && wort.trim()) neueZeile();
-        if (!zeile.teile.length && !wort.trim()) continue; // Leerzeichen am Zeilenanfang
+        if (!zeile.teile.length && !wort.trim()) { zeile.n += wort.length; continue; } // Leerzeichen am Zeilenanfang
         // Sehr lange Wörter hart umbrechen
         let rest = wort;
         while (w > breite && rest.length > 1) {
           let k = rest.length - 1;
           while (k > 1 && ctx.measureText(rest.slice(0, k)).width > breite - zeile.w) k--;
           zeile.teile.push({ t: rest.slice(0, k), r, x: zeile.w, w: ctx.measureText(rest.slice(0, k)).width });
-          zeile.g = Math.max(zeile.g, r.g);
+          zeile.g = Math.max(zeile.g, r.g); zeile.n += k;
           neueZeile();
           rest = rest.slice(k); w = ctx.measureText(rest).width;
         }
         zeile.teile.push({ t: rest, r, x: zeile.w, w });
-        zeile.w += w; zeile.g = Math.max(zeile.g, r.g);
+        zeile.w += w; zeile.g = Math.max(zeile.g, r.g); zeile.n += rest.length;
       }
     }
     neueZeile();
@@ -322,22 +329,85 @@ export function textLayout(ctx, el) {
   return zeilen;
 }
 
+// Größter Lauf im Feld bestimmt Zeilenhöhe und Grundlinie
+function groessterLauf(el) {
+  let best = null;
+  for (const a of el.absaetze) for (const r of a) if (!best || r.g > best.g) best = r;
+  return best || { g: 16, f: STANDARD_SCHRIFT };
+}
+// Feste Zeilenhöhe: auf liniertem Papier genau der Linienabstand (bei großer Schrift ein Vielfaches)
+export function zeilenhoehe(el) {
+  const g = groessterLauf(el).g;
+  if (el.raster) return el.raster.a * Math.max(1, Math.ceil((g * 1.1) / el.raster.a - .1));
+  return Math.round(g * 13) / 10;
+}
+// Abstand Zeilenoberkante → Grundlinie, genau wie der Browser ihn bei fester Zeilenhöhe setzt
+export function grundlinie(el) {
+  const r = groessterLauf(el), L = zeilenhoehe(el);
+  messCtx.font = schriftCss(r);
+  const m = messCtx.measureText('Hg');
+  const A = m.fontBoundingBoxAscent ?? r.g * .9, D = m.fontBoundingBoxDescent ?? r.g * .25;
+  return (L - (A + D)) / 2 + A;
+}
+export const textPolster = (el) => (el.hintergrund || el.rand ? 8 : 0);
+
 export function textMasse(ctx, el) {
   const zeilen = textLayout(ctx, el);
-  const pad = el.hintergrund || el.rand ? 8 : 0;
-  const h = zeilen.reduce((s, z) => s + z.g * 1.3, 0) + pad * 2;
-  return { zeilen, h: Math.max(h, (el.absaetze[0]?.[0]?.g || 16) * 1.3), pad };
+  const pad = textPolster(el), L = zeilenhoehe(el);
+  return { zeilen, h: Math.max(1, zeilen.length) * L + pad * 2, pad, L };
+}
+
+// Feld so verschieben, dass die Schrift auf der nächsten Linie steht (1,5 pt darüber, Unterlängen hängen drunter)
+export function aufLinieSetzen(el) {
+  if (!el.raster) return;
+  const { a, oben } = el.raster, pad = textPolster(el), bo = grundlinie(el);
+  const basis = el.y + pad + bo;
+  const k = Math.max(0, Math.round((basis + 1.5 - oben) / a));
+  el.y = oben + k * a - 1.5 - bo - pad;
+  rahmenVergessen(el);
+}
+
+// Passt der Text nicht mehr auf die Seite? Dann teilen: el behält, was passt; zurück kommt der Rest (oder null)
+export function textTeilen(el, seitenHoehe) {
+  const ctx = messCtx;
+  const { zeilen, pad, L } = textMasse(ctx, el);
+  const grenze = seitenHoehe - (el.raster ? 12 : 24);
+  const passen = Math.max(1, Math.floor((grenze - el.y - pad) / L));
+  if (zeilen.length <= passen) return null;
+  const ab = zeilen[passen];
+  // Zeichen, die im angeschnittenen Absatz schon oben stehen
+  const verbraucht = zeilen.slice(0, passen).filter((zl) => zl.a === ab.a).reduce((s, zl) => s + zl.n, 0);
+  const schneiden = (absatz, c) => {
+    const vorne = [], hinten = [];
+    let pos = 0;
+    for (const r of absatz) {
+      const len = r.t.length;
+      if (pos + len <= c) vorne.push({ ...r });
+      else if (pos >= c) hinten.push({ ...r });
+      else { vorne.push({ ...r, t: r.t.slice(0, c - pos) }); hinten.push({ ...r, t: r.t.slice(c - pos) }); }
+      pos += len;
+    }
+    return [vorne, hinten];
+  };
+  const [vorne, hinten] = schneiden(el.absaetze[ab.a], verbraucht);
+  if (hinten[0]) hinten[0].t = hinten[0].t.replace(/^\s+/, '');
+  const rest = { ...kopie(el), absaetze: [hinten.filter((r) => r.t).length ? hinten.filter((r) => r.t) : [{ ...el.absaetze[ab.a][0], t: '' }], ...el.absaetze.slice(ab.a + 1).map((a) => a.map((r) => ({ ...r })))] };
+  el.absaetze = [...el.absaetze.slice(0, ab.a), ...(vorne.some((r) => r.t) ? [vorne] : [])];
+  if (!el.absaetze.length) el.absaetze = [[{ ...rest.absaetze[0][0], t: '' }]];
+  rahmenVergessen(el);
+  return rest;
 }
 
 function zeichneText(ctx, el) {
-  const { zeilen, h, pad } = textMasse(ctx, el);
+  const { zeilen, h, pad, L } = textMasse(ctx, el);
+  const bo = grundlinie(el);
   if (el.hintergrund) { ctx.fillStyle = el.hintergrund; rundesRechteck(ctx, el.x, el.y, el.b, h, 6); ctx.fill(); }
   if (el.rand) { ctx.strokeStyle = el.rand; ctx.lineWidth = 1.2; rundesRechteck(ctx, el.x, el.y, el.b, h, 6); ctx.stroke(); }
   let y = el.y + pad;
   const innen = el.b - pad * 2;
   for (const z of zeilen) {
     const versatz = el.ausrichtung === 'mitte' ? (innen - z.w) / 2 : el.ausrichtung === 'rechts' ? innen - z.w : 0;
-    const grund = y + z.g * 1.02;
+    const grund = y + bo;
     for (const t of z.teile) {
       ctx.font = schriftCss(t.r); ctx.fillStyle = t.r.c; ctx.textBaseline = 'alphabetic';
       const x = el.x + pad + versatz + t.x;
@@ -346,7 +416,7 @@ function zeichneText(ctx, el) {
         ctx.fillRect(x, t.r.u ? grund + t.r.g * .1 : grund - t.r.g * .3, t.w, Math.max(.8, t.r.g / 14));
       }
     }
-    y += z.g * 1.3;
+    y += L;
   }
 }
 function rundesRechteck(ctx, x, y, w, h, r) {

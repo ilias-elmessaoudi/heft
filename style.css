@@ -206,6 +206,8 @@ svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width:
 .textfeld:focus { outline-width: 2px; }
 .textfeld div, .textfeld p { margin: 0; }
 .textfeld-breite { position: absolute; z-index: 4; width: 12px; height: 26px; border-radius: 6px; background: var(--flaeche); border: 2px solid var(--akzent); cursor: ew-resize; touch-action: none; }
+.textfeld-schieben { position: absolute; z-index: 4; width: 26px; height: 26px; border-radius: 50%; background: var(--akzent); cursor: move; touch-action: none; display: grid; place-items: center; box-shadow: 0 2px 6px rgba(0,0,0,.25); }
+.textfeld-schieben svg { width: 16px; height: 16px; fill: none; stroke: #fff; stroke-width: 2; stroke-linecap: round; }
 .auswahl { position: absolute; z-index: 2; border: 1.5px dashed var(--akzent); border-radius: 3px; cursor: move; touch-action: none; }
 .auswahl .griff { position: absolute; width: 16px; height: 16px; border-radius: 50%; background: #fff; border: 2px solid var(--akzent); touch-action: none; }
 .auswahl .griff.se { right: -9px; bottom: -9px; cursor: nwse-resize; }

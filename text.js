@@ -2,7 +2,7 @@
 
 import { ws, merken, z, api, $, esc, massstab, PALETTE } from './zustand.js';
 import { I } from './icons.js';
-import { rahmen, rahmenVergessen, kopie, textNormalisieren, textMasse, messCtx } from './zeichnen.js';
+import { rahmen, rahmenVergessen, kopie, textNormalisieren, textMasse, messCtx, RASTER, SYSTEM, zeilenhoehe, aufLinieSetzen, textTeilen, textPolster, schriftCss } from './zeichnen.js';
 import { alleSchriften, schriftLaden, vorschauLaden, schriftHinzufuegen } from './schriften.js';
 import { popover, popoverZu, farbwaehler } from './werkzeugleiste.js';
 
@@ -20,10 +20,10 @@ const ersteSchrift = (f) => f.split(',')[0].trim().replace(/^["']|["']$/g, '');
 
 function laufZuHtml(r, m) {
   const deko = [r.u && 'underline', r.s && 'line-through'].filter(Boolean).join(' ') || 'none';
-  return `<span style="font-family:'${r.f.replace(/'/g, '')}';font-size:${r.g * m}px;color:${r.c};font-weight:${r.b ? 700 : 400};font-style:${r.i ? 'italic' : 'normal'};text-decoration:${deko}">${esc(r.t)}</span>`;
+  return `<span style="font-family:'${r.f.replace(/'/g, '')}', ${SYSTEM.replace(/"/g, "'")};font-size:${r.g * m}px;color:${r.c};font-weight:${r.b ? 700 : 400};font-style:${r.i ? 'italic' : 'normal'};text-decoration:${deko}">${esc(r.t)}</span>`;
 }
 function absaetzeZuHtml(el, m) {
-  return el.absaetze.map((a) => `<div>${a.filter((r) => r.t).map((r) => laufZuHtml(r, m)).join('') || `<span style="font-family:'${a[0]?.f || ws.text.schrift}';font-size:${(a[0]?.g || ws.text.groesse) * m}px;color:${a[0]?.c || ws.text.farbe}"><br></span>`}</div>`).join('');
+  return el.absaetze.map((a) => `<div>${a.filter((r) => r.t).map((r) => laufZuHtml(r, m)).join('') || `<span style="font-family:'${a[0]?.f || ws.text.schrift}', ${SYSTEM.replace(/"/g, "'")};font-size:${(a[0]?.g || ws.text.groesse) * m}px;color:${a[0]?.c || ws.text.farbe}"><br></span>`}</div>`).join('');
 }
 
 function domZuAbsaetze(feld, m) {
@@ -76,12 +76,15 @@ export function textAnlegen(s, x, y, vorhanden) {
   textFertig();
   api.auswahlAufheben();
   if (!vorhanden) vorhanden = textAn(s, x, y);
+  const raster = !s.hintergrund && RASTER[s.vorlage] ? { ...RASTER[s.vorlage] } : null;
   const el = vorhanden || {
-    typ: 'text', x, y: y - ws.text.groesse * .7, b: Math.min(280, s.breite - x - 16), drehung: 0, ausrichtung: ws.text.ausrichtung,
-    hintergrund: ws.text.hintergrund, absaetze: [[standardLauf()]],
+    typ: 'text', x, y: y - ws.text.groesse * .7, b: s.breite - x - RAND, drehung: 0, ausrichtung: ws.text.ausrichtung,
+    hintergrund: ws.text.hintergrund, absaetze: [[standardLauf()]], raster,
   };
   textNormalisieren(el);
-  if (el.b < 60) { el.x = Math.max(10, s.breite - 220); el.b = 200; }
+  // Alte Felder auf liniertem Papier rasten beim ersten Bearbeiten ebenfalls auf die Linien ein
+  if (!vorhanden || el.raster === undefined) { el.raster = raster; aufLinieSetzen(el); }
+  imBlatt(el, s);
   const vorher = vorhanden ? kopie(vorhanden) : null;
   if (vorhanden) { vorhanden._versteckt = true; api.tinteRendern(s); }
   const feld = document.createElement('div');
@@ -91,8 +94,12 @@ export function textAnlegen(s, x, y, vorhanden) {
   z.dom.get(s.id).el.append(feld);
   const griff = document.createElement('div');
   griff.className = 'textfeld-breite';
-  z.dom.get(s.id).el.append(griff);
-  edit = { feld, el, s, vorher, neu: !vorhanden, griff };
+  const schieber = document.createElement('div');
+  schieber.className = 'textfeld-schieben';
+  schieber.title = 'Textfeld verschieben';
+  schieber.innerHTML = '<svg viewBox="0 0 24 24"><path d="M12 3v18M3 12h18M12 3l-3 3M12 3l3 3M12 21l-3-3M12 21l3-3M3 12l3-3M3 12l3 3M21 12l-3-3M21 12l-3 3"/></svg>';
+  z.dom.get(s.id).el.append(griff, schieber);
+  edit = { feld, el, s, vorher, neu: !vorhanden, griff, schieber };
   feldAnpassen();
   feld.innerHTML = absaetzeZuHtml(el, massstab());
   setTimeout(() => {
@@ -102,12 +109,27 @@ export function textAnlegen(s, x, y, vorhanden) {
   }, 0);
   feld.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); textFertig(); } e.stopPropagation(); });
   feld.addEventListener('blur', () => setTimeout(() => { if (edit?.feld === feld && !document.activeElement?.closest?.('#popover, #werkzeugreihe') && !$('#popover').contains(document.activeElement)) textFertig(); }, 150));
-  feld.addEventListener('input', () => { if (edit) griffPosition(); });
+  feld.addEventListener('input', () => {
+    if (!edit) return;
+    griffPosition();
+    clearTimeout(edit.nachziehen);
+    edit.nachziehen = setTimeout(nachziehen, 120);
+  });
+  // Ziehen am Verschiebe-Griff: Feld wandert mit, rastet beim Loslassen auf die nächste Linie ein
+  schieber.addEventListener('mousedown', (e) => e.preventDefault());
+  schieber.addEventListener('pointerdown', (e) => {
+    e.preventDefault(); e.stopPropagation();
+    const sx = e.clientX, sy = e.clientY, x0 = edit.el.x, y0 = edit.el.y, b0 = edit.el.b, m = massstab();
+    // Nach rechts gezogen wird das Feld schmaler (Text bricht neu um), statt über den Blattrand zu ragen
+    const bew = (ev) => { edit.el.x = Math.min(x0 + (ev.clientX - sx) / m, edit.s.breite - 68); edit.el.y = y0 + (ev.clientY - sy) / m; edit.el.b = b0; imBlatt(edit.el, edit.s); feldAnpassen(); };
+    const los = () => { removeEventListener('pointermove', bew); removeEventListener('pointerup', los); aufLinieSetzen(edit.el); imBlatt(edit.el, edit.s); feldAnpassen(); feld.focus(); };
+    addEventListener('pointermove', bew); addEventListener('pointerup', los);
+  });
   // Breite des Textfelds ziehen
   griff.addEventListener('pointerdown', (e) => {
     e.preventDefault(); e.stopPropagation();
     const start = e.clientX, b0 = edit.el.b, m = massstab();
-    const bew = (ev) => { edit.el.b = Math.max(40, b0 + (ev.clientX - start) / m); feldAnpassen(); };
+    const bew = (ev) => { edit.el.b = Math.max(40, Math.min(edit.s.breite - RAND - edit.el.x, b0 + (ev.clientX - start) / m)); feldAnpassen(); };
     const los = () => { removeEventListener('pointermove', bew); removeEventListener('pointerup', los); feld.focus(); };
     addEventListener('pointermove', bew); addEventListener('pointerup', los);
   });
@@ -116,9 +138,10 @@ export function textAnlegen(s, x, y, vorhanden) {
 
 function feldAnpassen() {
   const { feld, el } = edit, m = massstab();
-  const pad = el.hintergrund || el.rand ? 8 : 0;
+  const pad = textPolster(el), r = el.absaetze[0]?.[0];
   Object.assign(feld.style, {
     left: el.x * m + 'px', top: el.y * m + 'px', width: el.b * m + 'px', padding: pad * m + 'px',
+    font: r ? schriftCss({ ...r, g: r.g * m }) : '', lineHeight: zeilenhoehe(el) * m + 'px',
     background: el.hintergrund || 'transparent', border: el.rand ? `${1.2 * m}px solid ${el.rand}` : '0', borderRadius: 6 * m + 'px',
     textAlign: { links: 'left', mitte: 'center', rechts: 'right' }[el.ausrichtung || 'links'],
     transform: el.drehung ? `rotate(${el.drehung}rad)` : '', transformOrigin: 'center',
@@ -127,9 +150,49 @@ function feldAnpassen() {
 }
 function griffPosition() {
   if (!edit) return;
-  const { feld, griff } = edit;
+  const { feld, griff, schieber } = edit;
   griff.style.left = feld.offsetLeft + feld.offsetWidth - 6 + 'px';
   griff.style.top = feld.offsetTop + feld.offsetHeight / 2 - 13 + 'px';
+  schieber.style.left = feld.offsetLeft - 30 + 'px';
+  schieber.style.top = feld.offsetTop - 4 + 'px';
+}
+
+// Feld bleibt im Blatt: nie links/rechts heraus; ist es zu breit, wird es schmaler statt zu überstehen
+const RAND = 24;
+function imBlatt(el, s, nurVerschieben = false) {
+  el.x = Math.max(8, el.x);
+  if (!nurVerschieben && el.x + el.b > s.breite - 8) el.b = Math.max(60, s.breite - 8 - el.x);
+  if (el.x + el.b > s.breite - 8) el.x = Math.max(8, s.breite - 8 - el.b);
+  el.y = Math.max(4, Math.min(el.y, s.hoehe - zeilenhoehe(el) - 8));
+  rahmenVergessen(el);
+}
+
+// Beim Tippen: Größe/Linie nachziehen; läuft der Text unten über die Seite, geht es auf der nächsten weiter
+let teilen = false;
+async function nachziehen() {
+  if (!edit || teilen) return;
+  const m = edit.alteM || massstab();
+  edit.el.absaetze = domZuAbsaetze(edit.feld, m);
+  aufLinieSetzen(edit.el);
+  feldAnpassen();
+  const probe = kopie(edit.el);
+  if (!textTeilen(probe, edit.s.hoehe)) return;
+  teilen = true;
+  try {
+    const { s } = edit;
+    const rest = textFertig();
+    if (!rest) return;
+    const naechste = await api.naechsteSeite(s);
+    const fortsetzung = { ...rest, y: 0 };
+    fortsetzung.raster = !naechste.hintergrund && RASTER[naechste.vorlage] ? { ...RASTER[naechste.vorlage] } : null;
+    fortsetzung.y = (fortsetzung.raster ? fortsetzung.raster.oben : 40) - 10;
+    aufLinieSetzen(fortsetzung);
+    naechste.elemente.push(fortsetzung);
+    api.aktion({ typ: 'hinzu', seite: naechste, elemente: [fortsetzung] });
+    api.seiteGeaendert(naechste);
+    api.zuSeite(z.seiten.indexOf(naechste));
+    setTimeout(() => textAnlegen(naechste, fortsetzung.x, fortsetzung.y, fortsetzung), 250);
+  } finally { setTimeout(() => (teilen = false), 400); }
 }
 export function textNeuPositionieren() { if (edit) { const html = edit.feld.innerHTML; const alt = edit.alteM || massstab(); edit.el.absaetze = domZuAbsaetze(edit.feld, alt); edit.feld.innerHTML = absaetzeZuHtml(edit.el, massstab()); edit.alteM = massstab(); feldAnpassen(); void html; } }
 
@@ -140,12 +203,16 @@ export function textAn(s, x, y) {
 
 export function textFertig() {
   if (!edit) return;
-  const { feld, el, s, vorher, neu, griff } = edit;
+  const { feld, el, s, vorher, neu, griff, schieber } = edit;
   const m = edit.alteM || massstab();
+  clearTimeout(edit.nachziehen);
   el.absaetze = domZuAbsaetze(feld, m);
   edit = null;
-  feld.remove(); griff.remove();
+  feld.remove(); griff.remove(); schieber.remove();
   delete el._versteckt;
+  aufLinieSetzen(el);
+  imBlatt(el, s);
+  const rest = textTeilen(el, s.hoehe);
   const leer = !el.absaetze.some((a) => a.some((r) => r.t.trim()));
   if (neu && !leer) { s.elemente.push(el); api.aktion({ typ: 'hinzu', seite: s, elemente: [el] }); }
   else if (!neu && leer) { const i = s.elemente.indexOf(el); s.elemente.splice(i, 1); api.aktion({ typ: 'weg', seite: s, elemente: [el], indizes: [i] }); }
@@ -154,6 +221,7 @@ export function textFertig() {
   api.tinteRendern(s);
   api.seiteGeaendert(s);
   textleisteZeigen($('#schnell'));
+  return rest;
 }
 
 /* ================= Formatieren ================= */
