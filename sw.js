@@ -1,7 +1,7 @@
 // Hält die App offline bereit. Erst Netz (neueste Version), ohne Netz aus dem Speicher.
-const CACHE = 'heft-v5';
+const CACHE = 'heft-v6';
 const HUELLE = ['./', 'index.html', 'style.css', 'app.js', 'editor.js', 'zeichnen.js', 'db.js', 'zustand.js', 'icons.js', 'werkzeugleiste.js',
-  'text.js', 'schriften.js', 'zoomfenster.js', 'elemente.js', 'bild-werkzeug.js', 'pdf-werkzeug.js', 'abgleich.js', 'config.js', 'manifest.webmanifest',
+  'text.js', 'tabelle.js', 'schriften.js', 'zoomfenster.js', 'elemente.js', 'bild-werkzeug.js', 'pdf-werkzeug.js', 'abgleich.js', 'config.js', 'manifest.webmanifest',
   'icons/icon.svg', 'vendor/pdf.min.mjs', 'vendor/pdf.worker.min.mjs', 'vendor/pdf-lib.min.js', 'vendor/supabase.min.js'];
 
 self.addEventListener('install', (e) => {

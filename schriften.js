@@ -101,6 +101,7 @@ export async function schriftHinzufuegen(datei) {
 export async function schriftenFuer(seiten) {
   const laeufe = new Map();
   for (const s of seiten) for (const el of s.elemente) if (el.typ === 'text') for (const a of el.absaetze || []) for (const r of a) laeufe.set(schriftCss(r), r.f);
+  for (const s of seiten) for (const el of s.elemente) if (el.typ === 'tabelle') for (const b of [false, true]) laeufe.set(schriftCss({ f: el.f, g: el.g, b }), el.f);
   await Promise.all([...new Set(laeufe.values())].map(schriftLaden));
   await Promise.all([...laeufe.keys()].map((css) => document.fonts.load(css).catch(() => {})));
 }

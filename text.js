@@ -5,6 +5,7 @@ import { I } from './icons.js';
 import { rahmen, rahmenVergessen, kopie, textNormalisieren, textMasse, messCtx, RASTER, SYSTEM, zeilenhoehe, aufLinieSetzen, textTeilen, textPolster, schriftCss } from './zeichnen.js';
 import { alleSchriften, schriftLaden, vorschauLaden, schriftHinzufuegen } from './schriften.js';
 import { popover, popoverZu, farbwaehler } from './werkzeugleiste.js';
+import { tabelleAusDaten, tabelleErstellen, tabelleEinfuegen, neueTabelle } from './tabelle.js';
 
 let edit = null; // { feld, el, s, vorher, neu, griff }
 
@@ -108,6 +109,17 @@ export function textAnlegen(s, x, y, vorhanden) {
     document.execCommand('styleWithCSS', false, true);
   }, 0);
   feld.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); textFertig(); } e.stopPropagation(); });
+  // Einfügen: Tabellen werden echte Tabellen unter dem Textfeld, alles andere kommt als reiner Text (ohne fremde Formatierung)
+  feld.addEventListener('paste', (e) => {
+    e.preventDefault(); e.stopPropagation();
+    const roh = tabelleAusDaten(e.clipboardData);
+    if (!roh) return document.execCommand('insertText', false, (e.clipboardData.getData('text/plain') || '').replace(/\r/g, ''));
+    const { el, s: seite } = edit;
+    textFertig();
+    const leer = !seite.elemente.includes(el);
+    const unten = leer ? el.y : el.y + textMasse(messCtx, el).h + 8;
+    tabelleEinfuegen(seite, tabelleErstellen(seite, roh, el.x, unten));
+  });
   feld.addEventListener('blur', () => setTimeout(() => { if (edit?.feld === feld && !document.activeElement?.closest?.('#popover, #werkzeugreihe') && !$('#popover').contains(document.activeElement)) textFertig(); }, 150));
   feld.addEventListener('input', () => {
     if (!edit) return;
@@ -193,6 +205,18 @@ async function nachziehen() {
     api.zuSeite(z.seiten.indexOf(naechste));
     setTimeout(() => textAnlegen(naechste, fortsetzung.x, fortsetzung.y, fortsetzung), 250);
   } finally { setTimeout(() => (teilen = false), 400); }
+}
+// Reinen Text aus der Zwischenablage als neues Textfeld auf die Seite setzen
+export function textEinsetzen(s, text) {
+  const x = s.vorlage === 'liniert' && !s.hintergrund ? 70 : 40;
+  const el = { typ: 'text', x, y: 90, b: s.breite - x - RAND, drehung: 0, ausrichtung: 'links', hintergrund: null,
+    raster: !s.hintergrund && RASTER[s.vorlage] ? { ...RASTER[s.vorlage] } : null,
+    absaetze: text.replace(/\r/g, '').split('\n').map((t) => [{ ...standardLauf(), t }]) };
+  aufLinieSetzen(el);
+  s.elemente.push(el);
+  api.aktion({ typ: 'hinzu', seite: s, elemente: [el] });
+  api.tinteRendern(s); api.seiteGeaendert(s);
+  return el;
 }
 export function textNeuPositionieren() { if (edit) { const html = edit.feld.innerHTML; const alt = edit.alteM || massstab(); edit.el.absaetze = domZuAbsaetze(edit.feld, alt); edit.feld.innerHTML = absaetzeZuHtml(edit.el, massstab()); edit.alteM = massstab(); feldAnpassen(); void html; } }
 
@@ -290,6 +314,7 @@ export function textleisteZeigen(ziel) {
     <button class="chip" data-t="ausrichtung" title="Ausrichtung">${I[st.ausrichtung || 'links']}</button>
     <span class="trenner"></span>
     <button class="schnell-farbe an" data-t="farbe" data-popover-anker title="Textfarbe" style="color:${st.c}"><i style="background:${st.c}"></i></button>
+    <button class="chip" data-t="tabelle" title="Tabelle einfügen"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9.5h18M3 15h18M9 4v16M15 4v16"/></svg></button>
     <button class="chip" data-t="box" data-popover-anker title="Hintergrund des Textfelds"><i style="width:18px;height:18px;border-radius:4px;display:inline-block;background:${st.hintergrund || 'transparent'};box-shadow:inset 0 0 0 1.5px currentColor"></i></button>`;
 }
 
@@ -299,6 +324,7 @@ $('#werkzeugreihe').addEventListener('click', (e) => {
   const t = e.target.closest('[data-t]')?.dataset.t; if (!t || t === 'g') return;
   const st = aktStil();
   if (t === 'schrift') return schriftPopover(e.target.closest('[data-t]'));
+  if (t === 'tabelle') { textFertig(); return neueTabelle(); }
   if (t === 'kleiner' || t === 'groesser') {
     const g = t === 'groesser' ? (GROESSEN.find((x) => x > st.g) || st.g + 8) : ([...GROESSEN].reverse().find((x) => x < st.g) || Math.max(4, st.g - 2));
     return formatieren({ befehl: 'groesse', wert: g, lauf: { g }, groesse: g });

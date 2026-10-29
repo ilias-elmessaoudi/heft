@@ -150,7 +150,7 @@ export async function pdfExportieren(heft, seiten) {
         if (el.farbe && el.breite > 0) Object.assign(opt, { borderWidth: el.breite }, farbeMitAlpha(lib, el.farbe, 'borderColor', 'borderOpacity'));
         else opt.borderWidth = 0;
         seite.drawSvgPath(pfad, opt);
-      } else if (el.typ === 'text' || el.typ === 'bild' && (el.drehung || el.zuschnitt)) {
+      } else if (el.typ === 'text' || el.typ === 'tabelle' || el.typ === 'bild' && (el.drehung || el.zuschnitt)) {
         // Text (jede Schrift) und bearbeitete Bilder als scharfes Bild einbetten
         const r = rahmen(el);
         const png = await alsBild(el, r);

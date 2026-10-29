@@ -464,6 +464,10 @@ export function zeichneElement(ctx, el) {
     ctx.save();
     mitDrehung(ctx, el, textMasse(ctx, el).h, () => zeichneText(ctx, el));
     ctx.restore();
+  } else if (el.typ === 'tabelle') {
+    ctx.save();
+    mitDrehung(ctx, el, tabelleMasse(el).h, () => zeichneTabelle(ctx, el));
+    ctx.restore();
   } else if (el.typ === 'bild') {
     const img = bildHolen(el.dateiId);
     if (!(img?.complete && img.naturalWidth)) return;
@@ -472,6 +476,81 @@ export function zeichneElement(ctx, el) {
       ctx.drawImage(img, z.x * img.naturalWidth, z.y * img.naturalHeight, z.w * img.naturalWidth, z.h * img.naturalHeight, el.x, el.y, el.b, el.h);
     });
   }
+}
+
+/* ================= Tabellen ================= */
+
+// Zelltext in Zeilen umbrechen (Wörter, zu lange Wörter hart)
+function zelleUmbrechen(ctx, t, breite) {
+  const aus = [];
+  for (const absatz of String(t ?? '').split('\n')) {
+    let zeile = '';
+    for (const wort of absatz.split(/(\s+)/)) {
+      if (!wort) continue;
+      const probe = zeile + wort;
+      if (ctx.measureText(probe).width <= breite || !zeile.trim()) {
+        if (ctx.measureText(probe).width > breite && wort.trim()) {
+          // Wort passt allein nicht: zeichenweise teilen
+          let rest = probe;
+          while (ctx.measureText(rest).width > breite && rest.length > 1) {
+            let k = rest.length - 1;
+            while (k > 1 && ctx.measureText(rest.slice(0, k)).width > breite) k--;
+            aus.push(rest.slice(0, k)); rest = rest.slice(k);
+          }
+          zeile = rest;
+        } else zeile = probe;
+      } else { aus.push(zeile.trimEnd()); zeile = wort.trim() ? wort : ''; }
+    }
+    aus.push(zeile.trimEnd());
+  }
+  return aus;
+}
+
+export const tabellenSchrift = (el, kopf) => schriftCss({ f: el.f || STANDARD_SCHRIFT, g: el.g, b: kopf });
+
+// Maße einer Tabelle: Spalten-x, Zeilen-y, umbrochene Zellen. Auf liniertem Papier ist jede Zeile ein Vielfaches des Linienabstands.
+export function tabelleMasse(el) {
+  const ctx = messCtx, pad = 5;
+  const L = el.raster ? el.raster.a * Math.max(1, Math.ceil((el.g * 1.25) / el.raster.a - .1)) : Math.round(el.g * 13) / 10;
+  const xs = [0];
+  for (const a of el.spalten) xs.push(xs[xs.length - 1] + a * el.b);
+  const ys = [0], zeilen = [];
+  el.zellen.forEach((reihe, i) => {
+    ctx.font = tabellenSchrift(el, el.kopf && i === 0);
+    const teile = el.spalten.map((_, j) => zelleUmbrechen(ctx, reihe[j], Math.max(4, el.spalten[j] * el.b - pad * 2)));
+    const n = Math.max(1, ...teile.map((t) => t.length));
+    zeilen.push(teile);
+    ys.push(ys[i] + n * L + (el.raster ? 0 : pad * 2));
+  });
+  return { xs, ys, zeilen, L, pad, h: ys[ys.length - 1] };
+}
+
+function zeichneTabelle(ctx, el) {
+  const { xs, ys, zeilen, L, pad, h } = tabelleMasse(el);
+  const innen = el.raster ? 0 : pad;
+  if (el.hintergrund) { ctx.fillStyle = el.hintergrund; ctx.fillRect(el.x, el.y, el.b, h); }
+  if (el.kopf && ys.length > 1) { ctx.fillStyle = el.kopfFarbe || '#e9eef7'; ctx.fillRect(el.x, el.y, el.b, ys[1]); }
+  ctx.textBaseline = 'alphabetic';
+  zeilen.forEach((teile, i) => {
+    ctx.font = tabellenSchrift(el, el.kopf && i === 0);
+    ctx.fillStyle = el.c || '#000';
+    teile.forEach((linien, j) => linien.forEach((t, k) => {
+      ctx.fillText(t, el.x + xs[j] + pad, el.y + ys[i] + innen + k * L + L / 2 + el.g * .35);
+    }));
+  });
+  ctx.strokeStyle = el.linie || '#8e8e93'; ctx.lineWidth = .8;
+  ctx.beginPath();
+  for (const y of ys) { ctx.moveTo(el.x, el.y + y); ctx.lineTo(el.x + el.b, el.y + y); }
+  for (const x of xs) { ctx.moveTo(el.x + x, el.y); ctx.lineTo(el.x + x, el.y + h); }
+  ctx.stroke();
+}
+
+// Oberkante auf eine Linie legen, damit die Tabellenlinien genau auf den Papierlinien liegen
+export function tabelleAufLinie(el) {
+  if (!el.raster) return;
+  const { a, oben } = el.raster;
+  el.y = oben + Math.max(0, Math.round((el.y - oben) / a)) * a;
+  rahmenVergessen(el);
 }
 
 // Reihenfolge: Textmarker liegen unter der Schrift (wie bei GoodNotes)
@@ -503,6 +582,7 @@ export function rahmen(el) {
     else pk = el.ecken;
     w = el.breite + 4;
   } else if (el.typ === 'text') { textNormalisieren(el); pk = ecken4(el, textMasse(messCtx, el).h); }
+  else if (el.typ === 'tabelle') pk = ecken4(el, tabelleMasse(el).h);
   else pk = ecken4(el, el.h);
   const xs = pk.map((p) => p[0]), ys = pk.map((p) => p[1]);
   const r = { x1: Math.min(...xs) - w, y1: Math.min(...ys) - w, x2: Math.max(...xs) + w, y2: Math.max(...ys) + w };
@@ -595,7 +675,8 @@ export function skalieren(el, fx, fy, ax, ay) {
   else if (el.typ === 'text') {
     el.x = sx(el.x); el.y = sy(el.y); el.b *= fx;
     for (const a of el.absaetze) for (const r of a) r.g = Math.max(4, r.g * fy);
-  } else { el.x = sx(el.x); el.y = sy(el.y); el.b *= fx; el.h *= fy; }
+  } else if (el.typ === 'tabelle') { el.x = sx(el.x); el.y = sy(el.y); el.b *= fx; el.g = Math.max(4, el.g * fy); }
+  else { el.x = sx(el.x); el.y = sy(el.y); el.b *= fx; el.h *= fy; }
   rahmenVergessen(el);
 }
 
@@ -605,7 +686,7 @@ export function drehen(el, winkel, cx, cy) {
   if (el.typ === 'strich') punkteAbbilden(el, rot);
   else if (el.typ === 'form') { punkteAbbilden(el, rot); if (el.art === 'ellipse') el.winkel = (el.winkel || 0) + winkel; }
   else {
-    const h = el.typ === 'text' ? textMasse(messCtx, el).h : el.h;
+    const h = el.typ === 'text' ? textMasse(messCtx, el).h : el.typ === 'tabelle' ? tabelleMasse(el).h : el.h;
     const [mx, my] = rot(el.x + el.b / 2, el.y + h / 2);
     el.x = mx - el.b / 2; el.y = my - h / 2; el.drehung = (el.drehung || 0) + winkel;
   }
@@ -617,6 +698,7 @@ export function einfaerben(el, farbe) {
   if (el.typ === 'strich') el.farbe = farbe;
   else if (el.typ === 'form') el.farbe = farbe;
   else if (el.typ === 'text') for (const a of el.absaetze) for (const r of a) r.c = farbe;
+  else if (el.typ === 'tabelle') el.c = farbe;
 }
 
 export const kopie = (el) => JSON.parse(JSON.stringify(el));

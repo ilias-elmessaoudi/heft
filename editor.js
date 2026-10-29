@@ -6,7 +6,8 @@ import {
   verschieben, skalieren, drehen, einfaerben, kopie, bildLaden, bildHolen, formErkennen, formNormalisieren, textNormalisieren, textInhalt,
 } from './zeichnen.js';
 import { werkzeugleisteZeigen, popover, popoverZu, farbwaehler } from './werkzeugleiste.js';
-import { textAnlegen, textFertig, textBearbeitet, textleisteZeigen, textEinstellungen, textNeuPositionieren } from './text.js';
+import { textAnlegen, textFertig, textBearbeitet, textleisteZeigen, textEinstellungen, textNeuPositionieren, textEinsetzen } from './text.js';
+import { tabelleAusDaten, tabelleErstellen, tabelleEinfuegen, tabelleAn, tabelleBearbeiten, tabelleOffen, zelleAn } from './tabelle.js';
 import { zoomfensterUmschalten, zoomfensterOffen, zoomfensterAktualisieren, zoomfensterSeite, zfRendern } from './zoomfenster.js';
 import { elementePopover, alsElementSpeichern } from './elemente.js';
 import { hintergrundEntfernen, stickerEffekt, bildAusDaten } from './bild-werkzeug.js';
@@ -340,7 +341,12 @@ function gesteStarten(e, s, abbild, imZf) {
   menueZu(); popoverZu();
   const [x, y] = abbild(e);
   const w = ws.werkzeug;
-  if (w === 'text') { if (!imZf) textAnlegen(s, x, y); return; }
+  if (w === 'text') {
+    if (imZf) return;
+    const tab = tabelleAn(s, x, y);
+    if (tab) return tabelleBearbeiten(s, tab, false, zelleAn(tab, x, y));
+    return textAnlegen(s, x, y);
+  }
   if (w === 'elemente' || w === 'bild' || w === 'zoomfenster') return;
   textFertig();
   if (w !== 'lasso') auswahlAufheben();
@@ -578,7 +584,7 @@ function auswahlSetzen(s, elemente) {
   const m = document.createElement('div');
   m.className = 'auswahl-menue';
   const nurBild = elemente.length === 1 && elemente[0].typ === 'bild';
-  const nurText = elemente.length === 1 && elemente[0].typ === 'text';
+  const nurText = elemente.length === 1 && (elemente[0].typ === 'text' || elemente[0].typ === 'tabelle');
   const mitForm = elemente.some((e) => e.typ === 'form' && e.art !== 'linie' && e.art !== 'pfeil');
   m.innerHTML = [
     nurText && '<button data-a="bearbeiten">Bearbeiten</button>',
@@ -605,7 +611,7 @@ async function auswahlBefehl(b) {
   if (a === 'duplizieren') { kopieren(); einfuegen(14); }
   if (a === 'ausschneiden') { kopieren(); auswahlLoeschen(); }
   if (a === 'loeschen') auswahlLoeschen();
-  if (a === 'bearbeiten') { const el = aw.elemente[0]; auswahlAufheben(); textAnlegen(s, el.x, el.y, el); }
+  if (a === 'bearbeiten') { const el = aw.elemente[0]; auswahlAufheben(); if (el.typ === 'tabelle') tabelleBearbeiten(s, el); else textAnlegen(s, el.x, el.y, el); }
   if (a === 'farbe') {
     const erste = aw.elemente.find((e) => e.farbe || e.absaetze);
     farbwaehler(b, { titel: 'Farbe', farbe: erste?.farbe || erste?.absaetze?.[0]?.[0]?.c, gewaehlt: (f) => auswahlEinfaerben(f) });
@@ -743,10 +749,15 @@ async function ausZwischenablage() {
   } catch { hinweis('Zugriff auf die Zwischenablage nicht erlaubt – nutze Strg+V bzw. „Einsetzen“.'); }
 }
 document.addEventListener('paste', async (e) => {
-  if (!z.heft || $('#editor').hidden || textBearbeitet() || e.target.closest?.('input, textarea')) return;
+  if (!z.heft || $('#editor').hidden || textBearbeitet() || tabelleOffen() || e.target.closest?.('input, textarea')) return;
+  // Daten sofort lesen: nach einem await ist die Zwischenablage des Ereignisses leer
+  const roh = tabelleAusDaten(e.clipboardData), text = e.clipboardData?.getData('text/plain') || '';
+  const s = z.seiten[z.aktuell];
+  if (roh) { e.preventDefault(); const t = await tabelleEinfuegen(s, tabelleErstellen(s, roh)); ws.werkzeug = 'lasso'; merken(); werkzeugleisteZeigen(); auswahlSetzen(t[0][0], [t[0][1]]); return; }
   const bild = await bildAusDaten(e.clipboardData);
   if (bild) { e.preventDefault(); bildEinfuegen(bild); }
   else if (z.ablage) einfuegen(z.auswahl ? 14 : 0);
+  else if (text.trim()) { e.preventDefault(); const el = textEinsetzen(s, text); ws.werkzeug = 'lasso'; merken(); werkzeugleisteZeigen(); auswahlSetzen(s, [el]); }
 });
 bereich.addEventListener('dragover', (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; });
 bereich.addEventListener('drop', async (e) => {
